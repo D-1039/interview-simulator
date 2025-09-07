@@ -1,0 +1,9 @@
+venv/
+denvx/
+*.pyc
+__pycache__/
+.env
+feedback_history.json
+leaderboard.json
+session.json
+*.pdf
