@@ -13,37 +13,40 @@ except Exception as e:
     raise RuntimeError(f"Failed to initialize Groq client: {e}")
 
 def generate_questions(role, domain, mode, num_questions=5, question_set="Standard"):
-    prompt = f"Generate exactly {num_questions} {'technical' if mode == 'Technical Interview' else 'behavioral'} interview questions for a {role} role in {domain if domain else 'general software engineering'} using {question_set} style."
-    for attempt in range(3):  # Retry up to 3 times
+    prompt = f"Generate exactly {num_questions} {'technical' if mode == 'Technical Interview' else 'behavioral'} interview questions for a {role} role in {domain if domain else 'general software engineering'} using {question_set} style. Format as a numbered list (e.g., '1. Question text')."
+    for attempt in range(3):
         try:
             completion = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",  # Updated to recommended replacement
+                model="llama-3.3-70b-versatile",
                 messages=[
-                    {"role": "system", "content": "You are an interview question generator."},
+                    {"role": "system", "content": "You are an interview question generator. Return questions in a numbered list format (e.g., '1. Question text')."},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=1000  # Correct parameter
+                max_tokens=1000
             )
-            questions = completion.choices[0].message.content.strip().split("\n")
-            questions = [q.strip() for q in questions if q.strip() and q[0].isdigit()]
+            content = completion.choices[0].message.content.strip()
+            questions = [q.strip() for q in content.split("\n") if q.strip() and q[0].isdigit()]
             if len(questions) >= num_questions:
                 return questions[:num_questions]
             else:
-                time.sleep(2 ** attempt)  # Retry if not enough questions
+                print(f"Warning: Only {len(questions)} questions generated, retrying...")
+                time.sleep(2 ** attempt)
                 continue
         except Exception as e:
+            print(f"Attempt {attempt + 1} failed: {e}")
             if "rate limit" in str(e).lower():
-                time.sleep(2 ** attempt)  # Exponential backoff
+                time.sleep(2 ** attempt)
                 continue
             raise e
-    raise Exception("Failed to generate questions after retries")
+    # Fallback: return dummy questions to avoid empty list
+    return [f"Dummy question {i + 1} for {role} role (API failed)" for i in range(num_questions)]
 
 def evaluate_answer(question, answer, mode):
     prompt = f"Evaluate this {'technical' if mode == 'Technical Interview' else 'behavioral'} interview answer for question: '{question}'\nAnswer: '{answer}'\nAssess clarity, correctness, completeness, and technical accuracy. Provide detailed feedback, a score out of 10, and suggestions in plain text."
     for attempt in range(3):
         try:
             completion = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",  # Updated model
+                model="llama-3.3-70b-versatile",
                 messages=[
                     {"role": "system", "content": "You are an interview evaluator. Provide feedback in plain text, avoiding markdown tables."},
                     {"role": "user", "content": prompt}
@@ -56,7 +59,7 @@ def evaluate_answer(question, answer, mode):
                 time.sleep(2 ** attempt)
                 continue
             raise e
-    raise Exception("Failed to evaluate answer after retries")
+    return "Error: Failed to evaluate answer after retries"
 
 def generate_summary(role, mode, questions, responses, feedbacks, question_set="Standard"):
     if not responses:
@@ -69,7 +72,7 @@ def generate_summary(role, mode, questions, responses, feedbacks, question_set="
     for attempt in range(3):
         try:
             completion = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",  # Updated model
+                model="llama-3.3-70b-versatile",
                 messages=[
                     {"role": "system", "content": "You are an interview summarizer. Format output as plain text with bullet points under headers, avoiding markdown tables."},
                     {"role": "user", "content": prompt}
@@ -82,4 +85,4 @@ def generate_summary(role, mode, questions, responses, feedbacks, question_set="
                 time.sleep(2 ** attempt)
                 continue
             raise e
-    raise Exception("Failed to generate summary after retries")
+    return "Error: Failed to generate summary after retries"
