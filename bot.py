@@ -13,7 +13,12 @@ except Exception as e:
     raise RuntimeError(f"Failed to initialize Groq client: {e}")
 
 def generate_questions(role, domain, mode, num_questions=5, question_set="Standard"):
-    prompt = f"Generate exactly {num_questions} {'technical' if mode == 'Technical Interview' else 'behavioral'} interview questions for a {role} role in {domain if domain else 'general software engineering'} using {question_set} style. Format as a numbered list (e.g., '1. Question text')."
+    prompt = (
+        f"Generate exactly {num_questions} {'technical' if mode == 'Technical Interview' else 'behavioral'} "
+        f"interview questions for a {role} role in {domain if domain else 'general software engineering'} "
+        f"using {question_set} style. Format as a numbered list (e.g., '1. Question text'). "
+        f"Ensure each question is non-empty and starts with a number."
+    )
     for attempt in range(3):
         try:
             completion = client.chat.completions.create(
@@ -22,11 +27,14 @@ def generate_questions(role, domain, mode, num_questions=5, question_set="Standa
                     {"role": "system", "content": "You are an interview question generator. Return questions in a numbered list format (e.g., '1. Question text')."},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=1000
+                max_tokens=1000,
+                temperature=0.7  # Control creativity
             )
             content = completion.choices[0].message.content.strip()
+            print(f"Raw API response: {content}")  # Debug log
             questions = [q.strip() for q in content.split("\n") if q.strip() and q[0].isdigit()]
             if len(questions) >= num_questions:
+                print(f"Generated {len(questions)} questions: {questions}")
                 return questions[:num_questions]
             else:
                 print(f"Warning: Only {len(questions)} questions generated, retrying...")
@@ -38,11 +46,16 @@ def generate_questions(role, domain, mode, num_questions=5, question_set="Standa
                 time.sleep(2 ** attempt)
                 continue
             raise e
-    # Fallback: return dummy questions to avoid empty list
-    return [f"Dummy question {i + 1} for {role} role (API failed)" for i in range(num_questions)]
+    # Fallback questions
+    print(f"Fallback triggered: Returning {num_questions} dummy questions")
+    return [f"Dummy question {i + 1}: Describe a {mode.lower()} challenge for {role} role" for i in range(num_questions)]
 
 def evaluate_answer(question, answer, mode):
-    prompt = f"Evaluate this {'technical' if mode == 'Technical Interview' else 'behavioral'} interview answer for question: '{question}'\nAnswer: '{answer}'\nAssess clarity, correctness, completeness, and technical accuracy. Provide detailed feedback, a score out of 10, and suggestions in plain text."
+    prompt = (
+        f"Evaluate this {'technical' if mode == 'Technical Interview' else 'behavioral'} interview answer for question: '{question}'\n"
+        f"Answer: '{answer}'\n"
+        f"Assess clarity, correctness, completeness, and technical accuracy. Provide detailed feedback, a score out of 10, and suggestions in plain text."
+    )
     for attempt in range(3):
         try:
             completion = client.chat.completions.create(
@@ -63,12 +76,19 @@ def evaluate_answer(question, answer, mode):
 
 def generate_summary(role, mode, questions, responses, feedbacks, question_set="Standard"):
     if not responses:
-        prompt = f"The user skipped all questions in an interview for a {role} role in {mode} mode with {question_set} question set. Provide general advice. Format with sections: General Advice, Areas of Strength, Areas to Improve, Suggested Resources. Use plain text and bullet points."
+        prompt = (
+            f"The user skipped all questions in an interview for a {role} role in {mode} mode with {question_set} question set. "
+            f"Provide general advice. Format with sections: General Advice, Areas of Strength, Areas to Improve, Suggested Resources. "
+            f"Use plain text and bullet points."
+        )
     else:
         prompt = f"Summarize the interview for a {role} in {mode} mode with {question_set} question set.\n"
         for i, (q, resp, fb) in enumerate(zip(questions, responses, feedbacks)):
             prompt += f"Question {i+1}: {q}\nResponse: {resp}\nFeedback: {fb}\n\n"
-        prompt += "Generate a professional summary in plain text with sections: Questions and Responses, Areas of Strength, Areas to Improve, Suggested Resources, Overall Score. Use bullet points and regular hyphens."
+        prompt += (
+            "Generate a professional summary in plain text with sections: Questions and Responses, Areas of Strength, "
+            "Areas to Improve, Suggested Resources, Overall Score. Use bullet points and regular hyphens."
+        )
     for attempt in range(3):
         try:
             completion = client.chat.completions.create(
