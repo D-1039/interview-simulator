@@ -28,7 +28,7 @@ def generate_questions(role, domain, mode, num_questions=5, question_set="Standa
                     {"role": "user", "content": prompt}
                 ],
                 max_tokens=1000,
-                temperature=0.7  # Control creativity
+                temperature=0.7
             )
             content = completion.choices[0].message.content.strip()
             print(f"Raw API response: {content}")  # Debug log
@@ -46,7 +46,6 @@ def generate_questions(role, domain, mode, num_questions=5, question_set="Standa
                 time.sleep(2 ** attempt)
                 continue
             raise e
-    # Fallback questions
     print(f"Fallback triggered: Returning {num_questions} dummy questions")
     return [f"Dummy question {i + 1}: Describe a {mode.lower()} challenge for {role} role" for i in range(num_questions)]
 
@@ -75,7 +74,7 @@ def evaluate_answer(question, answer, mode):
     return "Error: Failed to evaluate answer after retries"
 
 def generate_summary(role, mode, questions, responses, feedbacks, question_set="Standard"):
-    if not responses:
+    if not responses or all(r == "Skipped" for r in responses):
         prompt = (
             f"The user skipped all questions in an interview for a {role} role in {mode} mode with {question_set} question set. "
             f"Provide general advice. Format with sections: General Advice, Areas of Strength, Areas to Improve, Suggested Resources. "
