@@ -14,8 +14,21 @@ if "HF_TOKEN" in st.secrets:
     token = st.secrets["HF_TOKEN"]
 else:
     token = os.getenv("HF_TOKEN")
-# Token is optional for anonymous access
-client = InferenceClient(token=token if token else None)
+
+# Validate token early
+if not token:
+    st.error("HF_TOKEN is missing. Please set it in Streamlit secrets (cloud) or .env file (local). Get a free token from https://huggingface.co/settings/tokens")
+    client = None
+else:
+    try:
+        # Test client initialization with token
+        client = InferenceClient(token=token)
+        # Optional: Test a simple call to verify (comment out if rate limits are an issue)
+        # _ = client.text_generation("Test", model="gpt2", max_new_tokens=1)
+        st.success("Hugging Face client initialized successfully.")  # Remove in production
+    except Exception as e:
+        st.error(f"Invalid HF_TOKEN: {str(e)}. Regenerate a new token at https://huggingface.co/settings/tokens and ensure you've accepted the model terms at https://huggingface.co/mistralai/Mistral-7B-Instruct-v0.3")
+        client = None
 
 def init_db():
     conn = sqlite3.connect("interview.db")
@@ -45,6 +58,10 @@ def generate_questions(role, domain, mode, num_questions=5, question_set="Standa
     if domain and len(domain) > 100:
         raise ValueError("Domain must be 1-100 characters")
     
+    if client is None:
+        st.warning("Using dummy questions due to missing/invalid HF_TOKEN.")
+        return [f"Dummy question {i + 1}: Describe a {mode.lower()} challenge for {role} role" for i in range(num_questions)]
+    
     prompt = (
         f"Generate exactly {num_questions} {'technical' if mode == 'Technical Interview' else 'behavioral'} "
         f"interview questions for a {role} role in {domain if domain else 'general software engineering'} "
@@ -69,15 +86,19 @@ def generate_questions(role, domain, mode, num_questions=5, question_set="Standa
                 return questions[:num_questions]
             time.sleep(2 ** attempt)
         except Exception as e:
-            if "rate limit" in str(e).lower():
+            if "rate limit" in str(e).lower() or "unauthorized" in str(e).lower():
                 time.sleep(2 ** attempt)
                 continue
             raise RuntimeError(f"Failed to generate questions: {e}")
+    st.warning("Using dummy questions after API retries failed.")
     return [f"Dummy question {i + 1}: Describe a {mode.lower()} challenge for {role} role" for i in range(num_questions)]
 
 def evaluate_answer(question, answer, mode):
     if not answer.strip():
         raise ValueError("Answer cannot be empty")
+    
+    if client is None:
+        return "Evaluation unavailable due to missing HF_TOKEN. Please provide a valid token.", 0
     
     prompt = (
         f"Evaluate this {'technical' if mode == 'Technical Interview' else 'behavioral'} interview answer for question: '{question}'\n"
@@ -100,13 +121,16 @@ def evaluate_answer(question, answer, mode):
             score = int(score_match.group(1)) if score_match else 0
             return feedback, score
         except Exception as e:
-            if "rate limit" in str(e).lower():
+            if "rate limit" in str(e).lower() or "unauthorized" in str(e).lower():
                 time.sleep(2 ** attempt)
                 continue
             raise RuntimeError(f"Failed to evaluate answer: {e}")
     return "Error: Failed to evaluate answer after retries", 0
 
 def generate_summary(role, mode, questions, responses, feedbacks, question_set="Standard", difficulty="Medium"):
+    if client is None:
+        return "Summary unavailable due to missing HF_TOKEN. Please provide a valid token. General advice: Practice more on key areas."
+    
     if not responses or all(r == "Skipped" for r in responses):
         prompt = (
             f"The user skipped all questions in an interview for a {role} role in {mode} mode with {question_set} question set at {difficulty} difficulty. "
@@ -134,7 +158,7 @@ def generate_summary(role, mode, questions, responses, feedbacks, question_set="
             )
             return response.choices[0].message.content.strip()
         except Exception as e:
-            if "rate limit" in str(e).lower():
+            if "rate limit" in str(e).lower() or "unauthorized" in str(e).lower():
                 time.sleep(2 ** attempt)
                 continue
             raise RuntimeError(f"Failed to generate summary: {e}")

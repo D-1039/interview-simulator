@@ -244,7 +244,7 @@ with col1:
                                 st.session_state.timer = 300
                                 st.rerun()
                         except Exception as e:
-                            st.error(f"Failed to generate questions: {str(e)}. Ensure you have a valid Hugging Face token if rate limits are exceeded.")
+                            st.error(f"Failed to generate questions: {str(e)}. Check your HF_TOKEN setup.")
     
     elif st.session_state.step == "interview" and st.session_state.questions:
         question = st.session_state.questions[st.session_state.current_question_index]
@@ -296,7 +296,7 @@ with col1:
                                     st.session_state.step = "summary"
                                 st.rerun()
                             except Exception as e:
-                                st.error(f"Failed to evaluate answer: {str(e)}. Ensure you have a valid Hugging Face token if rate limits are exceeded.")
+                                st.error(f"Failed to evaluate answer: {str(e)}. Check your HF_TOKEN setup.")
                     else:
                         st.warning("Please provide an answer.")
             with col_retry:
