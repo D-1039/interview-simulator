@@ -1,119 +1,12 @@
 import streamlit as st
 import os
 import json
-import time
 from datetime import datetime
-from groq import Groq
-from dotenv import load_dotenv
+from bot import generate_questions, evaluate_answer, generate_summary
 from fpdf import FPDF
 import unicodedata
 
-# Load environment variables
-load_dotenv()
-api_key = os.getenv("GROQ_API_KEY")
-if not api_key:
-    raise ValueError("GROQ_API_KEY not found in environment variables")
-try:
-    client = Groq(api_key=api_key)
-except Exception as e:
-    raise RuntimeError(f"Failed to initialize Groq client: {e}")
-
-# Bot functions (from bot.py)
-def generate_questions(role, domain, mode, num_questions=5, question_set="Standard"):
-    prompt = (
-        f"Generate exactly {num_questions} {'technical' if mode == 'Technical Interview' else 'behavioral'} "
-        f"interview questions for a {role} role in {domain if domain else 'general software engineering'} "
-        f"using {question_set} style. Format as a numbered list (e.g., '1. Question text'). "
-        f"Ensure each question is non-empty and starts with a number."
-    )
-    for attempt in range(3):
-        try:
-            completion = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[
-                    {"role": "system", "content": "You are an interview question generator. Return questions in a numbered list format."},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=512,
-                temperature=0.7
-            )
-            content = completion.choices[0].message.content.strip()
-            print(f"Raw API response: {content}")  # Debug log
-            questions = [q.strip() for q in content.split("\n") if q.strip() and q[0].isdigit()]
-            if len(questions) >= num_questions:
-                print(f"Generated {len(questions)} questions: {questions}")
-                return questions[:num_questions]
-            else:
-                print(f"Warning: Only {len(questions)} questions generated, retrying...")
-                time.sleep(2 ** attempt)
-                continue
-        except Exception as e:
-            print(f"Attempt {attempt + 1} failed: {e}")
-            if "rate limit" in str(e).lower():
-                time.sleep(2 ** attempt)
-                continue
-            raise e
-    print(f"Fallback triggered: Returning {num_questions} dummy questions")
-    return [f"Dummy question {i + 1}: Describe a {mode.lower()} challenge for {role} role" for i in range(num_questions)]
-
-def evaluate_answer(question, answer, mode):
-    prompt = (
-        f"Evaluate this {'technical' if mode == 'Technical Interview' else 'behavioral'} interview answer for question: '{question}'\n"
-        f"Answer: '{answer}'\n"
-        f"Assess clarity, correctness, completeness, and technical accuracy. Provide detailed feedback, a score out of 10, and suggestions in plain text."
-    )
-    for attempt in range(3):
-        try:
-            completion = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[
-                    {"role": "system", "content": "You are an interview evaluator. Provide feedback in plain text, avoiding markdown tables."},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=512
-            )
-            return completion.choices[0].message.content.strip()
-        except Exception as e:
-            if "rate limit" in str(e).lower():
-                time.sleep(2 ** attempt)
-                continue
-            raise e
-    return "Error: Failed to evaluate answer after retries"
-
-def generate_summary(role, mode, questions, responses, feedbacks, question_set="Standard"):
-    if not responses or all(r == "Skipped" for r in responses):
-        prompt = (
-            f"The user skipped all questions in an interview for a {role} role in {mode} mode with {question_set} question set. "
-            f"Provide general advice. Format with sections: General Advice, Areas of Strength, Areas to Improve, Suggested Resources. "
-            f"Use plain text and bullet points."
-        )
-    else:
-        prompt = f"Summarize the interview for a {role} in {mode} mode with {question_set} question set.\n"
-        for i, (q, resp, fb) in enumerate(zip(questions, responses, feedbacks)):
-            prompt += f"Question {i+1}: {q}\nResponse: {resp}\nFeedback: {fb}\n\n"
-        prompt += (
-            "Generate a professional summary in plain text with sections: Questions and Responses, Areas of Strength, "
-            "Areas to Improve, Suggested Resources, Overall Score. Use bullet points and regular hyphens."
-        )
-    for attempt in range(3):
-        try:
-            completion = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[
-                    {"role": "system", "content": "You are an interview summarizer. Format output as plain text with bullet points under headers, avoiding markdown tables."},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=512
-            )
-            return completion.choices[0].message.content.strip()
-        except Exception as e:
-            if "rate limit" in str(e).lower():
-                time.sleep(2 ** attempt)
-                continue
-            raise e
-    return "Error: Failed to generate summary after retries"
-
-# Set page configuration
+# Set page configuration for a clean, professional look
 st.set_page_config(page_title="Interview Simulator", layout="wide")
 
 # Initialize session state
@@ -171,12 +64,15 @@ def save_leaderboard(leaderboard):
 
 # FPDF-based PDF generation
 def normalize_text(text):
+    """Normalize Unicode characters to ASCII for FPDF compatibility."""
     if not text:
         return text
+    # Normalize to NFKD form and encode to ASCII, replacing non-ASCII characters
     return unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode('ascii')
 
 def generate_pdf_summary(user_id, role, mode, questions, responses, feedbacks, summary):
     try:
+        # Normalize text to handle Unicode characters
         user_id = normalize_text(user_id)
         role = normalize_text(role)
         mode = normalize_text(mode)
@@ -194,19 +90,17 @@ def generate_pdf_summary(user_id, role, mode, questions, responses, feedbacks, s
         pdf.cell(0, 10, f"Date: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}", ln=True, align="C")
         pdf.ln(10)
 
+        # Add summary with bullet points
         pdf.set_font("Arial", "B", 14)
-        pdf.cell(0, 10, "Questions and Responses", ln=True)
-        pdf.set_font("Arial", "", 12)
-        for i, (q, r, f) in enumerate(zip(questions, responses, feedbacks)):
-            pdf.multi_cell(0, 10, f"Question {i+1}: {q}")
-            pdf.multi_cell(0, 10, f"Response: {r}")
-            pdf.multi_cell(0, 10, f"Feedback: {f}")
-            pdf.ln(5)
-
-        pdf.set_font("Arial", "B", 14)
-        pdf.cell(0, 10, "Summary", ln=True)
-        pdf.set_font("Arial", "", 12)
-        pdf.multi_cell(0, 10, summary)
+        lines = summary.split("\n")
+        for line in lines:
+            if line.strip().startswith("- "):
+                pdf.set_font("Arial", "", 12)
+                pdf.multi_cell(0, 10, f"  - {line.strip()[2:]}")
+            elif line.strip():
+                pdf.set_font("Arial", "B", 14)
+                pdf.cell(0, 10, line.strip(), ln=True)
+                pdf.ln(2)
 
         pdf_file = f"summary_{user_id}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf"
         pdf.output(pdf_file)
@@ -218,17 +112,20 @@ def generate_pdf_summary(user_id, role, mode, questions, responses, feedbacks, s
 # Main UI
 st.title("🚀 Interview Simulator Chatbot")
 
-# Sidebar for settings
+# Sidebar for settings (without Start Interview button)
 with st.sidebar:
     st.header("Settings")
-    user_id = st.text_input("User ID", value=st.session_state.user_id, key="user_id")
-    role = st.selectbox("Job Role", ["Software Engineer", "Product Manager", "Data Analyst", "Other"], key="role")
+    user_id = st.text_input("User ID", value=st.session_state.user_id)
+    if user_id:
+        st.session_state.user_id = user_id
+
+    role = st.selectbox("Job Role", ["Software Engineer", "Product Manager", "Data Analyst", "Other"])
     if role == "Other":
-        role = st.text_input("Specify Job Role", key="custom_role")
-    domain = st.text_input("Domain (optional, e.g., frontend, ML)", key="domain")
-    mode = st.radio("Interview Mode", ["Technical Interview", "Behavioral Interview"], key="mode")
-    question_set = st.selectbox("Question Set", ["Standard", "FAANG-style", "STAR-based"], key="question_set")
-    num_questions = st.slider("Number of Questions", 1, 10, 5, key="num_questions")
+        role = st.text_input("Specify Job Role")
+    domain = st.text_input("Domain (optional, e.g., frontend, ML)")
+    mode = st.radio("Interview Mode", ["Technical Interview", "Behavioral Interview"])
+    question_set = st.selectbox("Question Set", ["Standard", "FAANG-style", "STAR-based"])
+    num_questions = st.slider("Number of Questions", 1, 10, 5)
 
 # Main content area
 col1, col2 = st.columns([2, 1])
@@ -239,122 +136,107 @@ with col1:
         with st.container():
             st.info("Please select your settings and click 'Start Interview' below.")
             if st.button("Start Interview", key="start_interview", help="Begin the interview with the selected settings"):
-                if not st.session_state.user_id:
+                if not user_id:
                     st.warning("Please enter a User ID.")
                 else:
+                    st.session_state.role = role
+                    st.session_state.domain = domain
+                    st.session_state.mode = mode
+                    st.session_state.question_set = question_set
                     try:
-                        st.session_state.role = role
-                        st.session_state.domain = domain
-                        st.session_state.mode = mode
-                        st.session_state.question_set = question_set
-                        st.session_state.num_questions = num_questions
-                        questions = generate_questions(role, domain, mode, num_questions, question_set)
-                        if not questions:
-                            st.error("Failed to generate questions. Please try again.")
-                            st.session_state.step = "selection"
+                        st.session_state.questions = generate_questions(role, domain, mode, num_questions, question_set)
+                        if len(st.session_state.questions) != num_questions:
+                            st.warning(f"Generated {len(st.session_state.questions)} questions instead of {num_questions}. Please try again.")
+                            st.session_state.questions = []
                         else:
-                            st.session_state.questions = questions
                             st.session_state.current_question_index = 0
                             st.session_state.responses = []
                             st.session_state.feedbacks = []
                             st.session_state.scores = []
-                            st.session_state.summary = None
                             st.session_state.step = "interview"
-                    except Exception as e:
-                        st.error(f"Error generating questions: {str(e)}")
-                        st.session_state.step = "selection"
-                    st.rerun()
-
-    elif st.session_state.step == "interview":
-        if not st.session_state.questions:
-            st.error("No questions available. Returning to settings.")
-            st.session_state.step = "selection"
-            st.rerun()
-        elif st.session_state.current_question_index >= len(st.session_state.questions):
-            st.session_state.summary = generate_summary(
-                st.session_state.role, st.session_state.mode, st.session_state.questions,
-                st.session_state.responses, st.session_state.feedbacks, st.session_state.question_set
-            )
-            st.session_state.step = "summary"
-            st.rerun()
-        else:
-            question = st.session_state.questions[st.session_state.current_question_index]
-            with st.container():
-                st.subheader(f"Question {st.session_state.current_question_index + 1}/{len(st.session_state.questions)}")
-                st.write(question)
-
-                if st.session_state.current_question_index > 0 and st.session_state.feedbacks:
-                    with st.expander("Previous Feedback", expanded=False):
-                        st.write(st.session_state.feedbacks[-1])
-
-                answer = st.text_area("Your Answer", key=f"answer_{st.session_state.current_question_index}")
-
-                col_submit, col_retry, col_skip = st.columns(3)
-                with col_submit:
-                    if st.button("Submit", key=f"submit_{st.session_state.current_question_index}"):
-                        if answer:
-                            feedback = evaluate_answer(question, answer, st.session_state.mode)
-                            score = int(feedback.split("Score:")[1].split("/")[0].strip()) if "Score:" in feedback else 0
-                            st.session_state.responses.append(answer)
-                            st.session_state.feedbacks.append(feedback)
-                            st.session_state.scores.append(score)
-
-                            history = load_history()
-                            if st.session_state.user_id not in history:
-                                history[st.session_state.user_id] = []
-                            history[st.session_state.user_id].append({
-                                "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                                "role": st.session_state.role,
-                                "mode": st.session_state.mode,
-                                "question_set": st.session_state.question_set,
-                                "question": question,
-                                "answer": answer,
-                                "feedback": feedback,
-                                "score": score
-                            })
-                            save_history(history)
-
-                            leaderboard = load_leaderboard()
-                            user_entry = next((entry for entry in leaderboard if entry["user_id"] == st.session_state.user_id), None)
-                            if user_entry:
-                                user_entry["total_score"] += score
-                                user_entry["attempts"] += 1
-                            else:
-                                leaderboard.append({"user_id": st.session_state.user_id, "total_score": score, "attempts": 1})
-                            save_leaderboard(leaderboard)
-
-                            st.session_state.current_question_index += 1
-                            if st.session_state.current_question_index >= len(st.session_state.questions):
-                                st.session_state.summary = generate_summary(
-                                    st.session_state.role, st.session_state.mode, st.session_state.questions,
-                                    st.session_state.responses, st.session_state.feedbacks, st.session_state.question_set
-                                )
-                                st.session_state.step = "summary"
+                            st.session_state.summary = None
                             st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to generate questions: {str(e)}")
+    
+    elif st.session_state.step == "interview" and st.session_state.questions:
+        question = st.session_state.questions[st.session_state.current_question_index]
+        with st.container():
+            st.subheader(f"Question {st.session_state.current_question_index + 1}/{len(st.session_state.questions)}")
+            st.write(question)
+            
+            # Display previous feedback if available
+            if st.session_state.current_question_index > 0 and st.session_state.feedbacks:
+                with st.expander("Previous Feedback", expanded=False):
+                    st.write(st.session_state.feedbacks[-1])
+            
+            answer = st.text_area("Your Answer", key=f"answer_{st.session_state.current_question_index}")
+            
+            col_submit, col_retry, col_skip = st.columns(3)
+            with col_submit:
+                if st.button("Submit", key=f"submit_{st.session_state.current_question_index}"):
+                    if answer:
+                        feedback = evaluate_answer(question, answer, st.session_state.mode)
+                        score = int(feedback.split("Score:")[1].split("/")[0].strip()) if "Score:" in feedback else 0
+                        st.session_state.responses.append(answer)
+                        st.session_state.feedbacks.append(feedback)
+                        st.session_state.scores.append(score)
+
+                        # Save to history
+                        history = load_history()
+                        if user_id not in history:
+                            history[user_id] = []
+                        history[user_id].append({
+                            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "role": role,
+                            "mode": mode,
+                            "question_set": question_set,
+                            "question": question,
+                            "answer": answer,
+                            "feedback": feedback,
+                            "score": score
+                        })
+                        save_history(history)
+
+                        # Update leaderboard
+                        leaderboard = load_leaderboard()
+                        user_entry = next((entry for entry in leaderboard if entry["user_id"] == user_id), None)
+                        if user_entry:
+                            user_entry["total_score"] += score
+                            user_entry["attempts"] += 1
                         else:
-                            st.warning("Please provide an answer.")
-                with col_retry:
-                    if st.button("Retry", key=f"retry_{st.session_state.current_question_index}"):
-                        st.rerun()
-                with col_skip:
-                    if st.button("Skip", key=f"skip_{st.session_state.current_question_index}"):
-                        st.session_state.responses.append("Skipped")
-                        st.session_state.feedbacks.append("No feedback for skipped question")
-                        st.session_state.scores.append(0)
+                            leaderboard.append({"user_id": user_id, "total_score": score, "attempts": 1})
+                        save_leaderboard(leaderboard)
+
                         st.session_state.current_question_index += 1
                         if st.session_state.current_question_index >= len(st.session_state.questions):
                             st.session_state.summary = generate_summary(
-                                st.session_state.role, st.session_state.mode, st.session_state.questions,
-                                st.session_state.responses, st.session_state.feedbacks, st.session_state.question_set
+                                role, mode, st.session_state.questions, st.session_state.responses,
+                                st.session_state.feedbacks, question_set
                             )
                             st.session_state.step = "summary"
+                        st.rerun()
+                    else:
+                        st.warning("Please provide an answer.")
+            with col_retry:
+                if st.button("Retry", key=f"retry_{st.session_state.current_question_index}"):
+                    st.rerun()
+            with col_skip:
+                if st.button("Skip", key=f"skip_{st.session_state.current_question_index}"):
+                    st.session_state.current_question_index += 1
+                    if st.session_state.current_question_index >= len(st.session_state.questions):
+                        st.session_state.summary = generate_summary(
+                            role, mode, st.session_state.questions, st.session_state.responses,
+                            st.session_state.feedbacks, question_set
+                        )
+                        st.session_state.step = "summary"
                         st.rerun()
 
     elif st.session_state.step == "summary":
         st.header("Interview Summary")
         with st.container():
             st.write(st.session_state.summary)
-
+            
             col_txt, col_pdf, col_new = st.columns(3)
             with col_txt:
                 if st.button("Export as TXT"):
@@ -363,7 +245,7 @@ with col1:
                     with open("interview_summary.txt", "r", encoding="utf-8") as f:
                         st.download_button("Download TXT", f, file_name="interview_summary.txt")
             with col_pdf:
-                if st.button("Export as PDF") and st.session_state.responses:
+                if st.button("Export as PDF", disabled=not st.session_state.responses):
                     pdf_file = generate_pdf_summary(
                         st.session_state.user_id,
                         st.session_state.role,
@@ -389,7 +271,9 @@ with col2:
     if st.session_state.user_id:
         history = load_history()
         if st.session_state.user_id in history:
+            # Sort history by timestamp in descending order (newest first)
             sorted_history = sorted(history[st.session_state.user_id], key=lambda x: x["timestamp"], reverse=True)
+            # Show only the first 5 entries unless "Show More History" is clicked
             display_limit = len(sorted_history) if st.session_state.show_all_history else min(5, len(sorted_history))
             for i, entry in enumerate(sorted_history[:display_limit]):
                 with st.expander(f"{entry['timestamp']} - {entry['role']} ({entry['mode']})", expanded=False):
@@ -397,10 +281,12 @@ with col2:
                     st.write(f"**Answer**: {entry['answer']}")
                     st.write(f"**Feedback**: {entry['feedback']}")
                     st.write(f"**Score**: {entry['score']}/10")
+            # Add "Show More History" button if there are more than 5 entries
             if len(sorted_history) > 5 and not st.session_state.show_all_history:
                 if st.button("Show More History", key="show_more_history"):
                     st.session_state.show_all_history = True
                     st.rerun()
+            # Add "Show Less History" button if showing all entries
             elif st.session_state.show_all_history and len(sorted_history) > 5:
                 if st.button("Show Less History", key="show_less_history"):
                     st.session_state.show_all_history = False
@@ -414,7 +300,7 @@ with col2:
             avg_score = entry["total_score"] / entry["attempts"]
             st.write(f"{i}. {entry['user_id']} - Avg Score: {avg_score:.2f} ({entry['attempts']} attempts)")
 
-# Session management
+# Save and load session
 with st.sidebar:
     st.header("Session Management")
     if st.button("Save Session"):

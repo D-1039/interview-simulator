@@ -22,13 +22,13 @@ def generate_questions(role, domain, mode, num_questions=5, question_set="Standa
     for attempt in range(3):
         try:
             completion = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model="openai/gpt-oss-20b",
                 messages=[
                     {"role": "system", "content": "You are an interview question generator. Return questions in a numbered list format (e.g., '1. Question text')."},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=1000,
-                temperature=0.7
+                max_tokens=512,
+                temperature=1
             )
             content = completion.choices[0].message.content.strip()
             print(f"Raw API response: {content}")  # Debug log
@@ -58,12 +58,13 @@ def evaluate_answer(question, answer, mode):
     for attempt in range(3):
         try:
             completion = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model="openai/gpt-oss-20b",
                 messages=[
                     {"role": "system", "content": "You are an interview evaluator. Provide feedback in plain text, avoiding markdown tables."},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=512
+                max_tokens=512,
+                temperature=1
             )
             return completion.choices[0].message.content.strip()
         except Exception as e:
@@ -91,12 +92,13 @@ def generate_summary(role, mode, questions, responses, feedbacks, question_set="
     for attempt in range(3):
         try:
             completion = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
+                model="openai/gpt-oss-20b",
                 messages=[
                     {"role": "system", "content": "You are an interview summarizer. Format output as plain text with bullet points under headers, avoiding markdown tables."},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=512
+                max_tokens=512,
+                temperature=1
             )
             return completion.choices[0].message.content.strip()
         except Exception as e:
