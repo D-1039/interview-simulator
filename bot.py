@@ -1,68 +1,84 @@
 import os
-import streamlit as st  # Add this import
 import time
 import re
 import sqlite3
-from groq import Groq
+from huggingface_hub import InferenceClient
 from dotenv import load_dotenv
+import streamlit as st
 
-# Load .env for local development (optional)
+# Load environment variables
 load_dotenv()
 
-# Get API key: Use st.secrets in cloud, fallback to env var locally
-if "GROQ_API_KEY" in st.secrets:
-    api_key = st.secrets["GROQ_API_KEY"]
+# Get Hugging Face token: Use st.secrets in cloud, fallback to env
+if "HF_TOKEN" in st.secrets:
+    token = st.secrets["HF_TOKEN"]
 else:
-    api_key = os.getenv("GROQ_API_KEY")
+    token = os.getenv("HF_TOKEN")
+# Token is optional for anonymous access
+client = InferenceClient(token=token if token else None)
 
-if not api_key:
-    raise ValueError("GROQ_API_KEY not found. Set it in Streamlit secrets or .env file.")
+def init_db():
+    conn = sqlite3.connect("interview.db")
+    c = conn.cursor()
+    c.execute("""CREATE TABLE IF NOT EXISTS history (
+        user_id TEXT, 
+        timestamp TEXT, 
+        role TEXT, 
+        mode TEXT, 
+        question_set TEXT, 
+        question TEXT, 
+        answer TEXT, 
+        feedback TEXT, 
+        score INTEGER
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS leaderboard (
+        user_id TEXT PRIMARY KEY, 
+        total_score INTEGER, 
+        attempts INTEGER
+    )""")
+    conn.commit()
+    conn.close()
 
-try:
-    client = Groq(api_key=api_key)
-except Exception as e:
-    raise RuntimeError(f"Failed to initialize Groq client: {e}")
-
-# ... (rest of your bot.py code remains the same)
-
-def generate_questions(role, domain, mode, num_questions=5, question_set="Standard"):
+def generate_questions(role, domain, mode, num_questions=5, question_set="Standard", difficulty="Medium"):
+    if not role.strip() or len(role) > 100:
+        raise ValueError("Role must be 1-100 characters")
+    if domain and len(domain) > 100:
+        raise ValueError("Domain must be 1-100 characters")
+    
     prompt = (
         f"Generate exactly {num_questions} {'technical' if mode == 'Technical Interview' else 'behavioral'} "
         f"interview questions for a {role} role in {domain if domain else 'general software engineering'} "
-        f"using {question_set} style. Format as a numbered list (e.g., '1. Question text'). "
+        f"using {question_set} style at {difficulty} difficulty. "
+        f"Format as a numbered list (e.g., '1. Question text'). "
         f"Ensure each question is non-empty and starts with a number."
     )
     for attempt in range(3):
         try:
-            completion = client.chat.completions.create(
-                model="openai/gpt-oss-20b",
+            response = client.chat_completion(
                 messages=[
                     {"role": "system", "content": "You are an interview question generator. Return questions in a numbered list format (e.g., '1. Question text')."},
                     {"role": "user", "content": prompt}
                 ],
+                model="mistralai/Mistral-7B-Instruct-v0.3",
                 max_tokens=512,
                 temperature=1
             )
-            content = completion.choices[0].message.content.strip()
-            print(f"Raw API response: {content}")  # Debug log
+            content = response.choices[0].message.content.strip()
             questions = [q.strip() for q in content.split("\n") if q.strip() and q[0].isdigit()]
             if len(questions) >= num_questions:
-                print(f"Generated {len(questions)} questions: {questions}")
                 return questions[:num_questions]
-            else:
-                print(f"Warning: Only {len(questions)} questions generated, retrying...")
-                time.sleep(2 ** attempt)
-                continue
+            time.sleep(2 ** attempt)
         except Exception as e:
-            print(f"Attempt {attempt + 1} failed: {e}")
             if "rate limit" in str(e).lower():
                 time.sleep(2 ** attempt)
                 continue
-            raise e
-    print(f"Fallback triggered: Returning {num_questions} dummy questions")
+            raise RuntimeError(f"Failed to generate questions: {e}")
     return [f"Dummy question {i + 1}: Describe a {mode.lower()} challenge for {role} role" for i in range(num_questions)]
 
 def evaluate_answer(question, answer, mode):
+    if not answer.strip():
+        raise ValueError("Answer cannot be empty")
+    
     prompt = (
         f"Evaluate this {'technical' if mode == 'Technical Interview' else 'behavioral'} interview answer for question: '{question}'\n"
         f"Answer: '{answer}'\n"
@@ -70,32 +86,35 @@ def evaluate_answer(question, answer, mode):
     )
     for attempt in range(3):
         try:
-            completion = client.chat.completions.create(
-                model="openai/gpt-oss-20b",
+            response = client.chat_completion(
                 messages=[
                     {"role": "system", "content": "You are an interview evaluator. Provide feedback in plain text, avoiding markdown tables."},
                     {"role": "user", "content": prompt}
                 ],
+                model="mistralai/Mistral-7B-Instruct-v0.3",
                 max_tokens=512,
                 temperature=1
             )
-            return completion.choices[0].message.content.strip()
+            feedback = response.choices[0].message.content.strip()
+            score_match = re.search(r"Score:\s*(\d+)/10", feedback)
+            score = int(score_match.group(1)) if score_match else 0
+            return feedback, score
         except Exception as e:
             if "rate limit" in str(e).lower():
                 time.sleep(2 ** attempt)
                 continue
-            raise e
-    return "Error: Failed to evaluate answer after retries"
+            raise RuntimeError(f"Failed to evaluate answer: {e}")
+    return "Error: Failed to evaluate answer after retries", 0
 
-def generate_summary(role, mode, questions, responses, feedbacks, question_set="Standard"):
+def generate_summary(role, mode, questions, responses, feedbacks, question_set="Standard", difficulty="Medium"):
     if not responses or all(r == "Skipped" for r in responses):
         prompt = (
-            f"The user skipped all questions in an interview for a {role} role in {mode} mode with {question_set} question set. "
+            f"The user skipped all questions in an interview for a {role} role in {mode} mode with {question_set} question set at {difficulty} difficulty. "
             f"Provide general advice. Format with sections: General Advice, Areas of Strength, Areas to Improve, Suggested Resources. "
             f"Use plain text and bullet points."
         )
     else:
-        prompt = f"Summarize the interview for a {role} in {mode} mode with {question_set} question set.\n"
+        prompt = f"Summarize the interview for a {role} in {mode} mode with {question_set} question set at {difficulty} difficulty.\n"
         for i, (q, resp, fb) in enumerate(zip(questions, responses, feedbacks)):
             prompt += f"Question {i+1}: {q}\nResponse: {resp}\nFeedback: {fb}\n\n"
         prompt += (
@@ -104,19 +123,19 @@ def generate_summary(role, mode, questions, responses, feedbacks, question_set="
         )
     for attempt in range(3):
         try:
-            completion = client.chat.completions.create(
-                model="openai/gpt-oss-20b",
+            response = client.chat_completion(
                 messages=[
                     {"role": "system", "content": "You are an interview summarizer. Format output as plain text with bullet points under headers, avoiding markdown tables."},
                     {"role": "user", "content": prompt}
                 ],
+                model="mistralai/Mistral-7B-Instruct-v0.3",
                 max_tokens=512,
                 temperature=1
             )
-            return completion.choices[0].message.content.strip()
+            return response.choices[0].message.content.strip()
         except Exception as e:
             if "rate limit" in str(e).lower():
                 time.sleep(2 ** attempt)
                 continue
-            raise e
+            raise RuntimeError(f"Failed to generate summary: {e}")
     return "Error: Failed to generate summary after retries"
