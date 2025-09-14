@@ -208,7 +208,7 @@ if st.session_state.step == "interview" and st.session_state.timer > 0:
             st.session_state.step = "summary"
         st.rerun()
 
-# Main content area
+# Main content
 col1, col2 = st.columns([2, 1])
 
 with col1:
@@ -347,9 +347,18 @@ with col1:
                         }
                     }
                 }
-                ```chartjs
-                chart_data
-                ```
+                # Render Chart.js using st.markdown with HTML/JS
+                chart_html = f"""
+                <div>
+                    <canvas id="performanceChart"></canvas>
+                    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+                    <script>
+                        const ctx = document.getElementById('performanceChart').getContext('2d');
+                        new Chart(ctx, {json.dumps(chart_data)});
+                    </script>
+                </div>
+                """
+                st.markdown(chart_html, unsafe_allow_html=True)
 
             col_txt, col_pdf, col_new = st.columns(3)
             with col_txt:
