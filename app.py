@@ -18,6 +18,17 @@ st.markdown("""
     .stTextArea, .stTextInput, .stSelectbox, .stRadio, .stSlider { 
         max-width: 600px; 
     }
+    /* Improve text wrapping and symbol rendering */
+    .stMarkdown, .stText, .stExpander p {
+        word-wrap: break-word;
+        white-space: pre-wrap;
+        font-family: Arial, sans-serif;
+    }
+    /* Ensure canvas renders correctly */
+    canvas {
+        max-width: 100%;
+        height: auto !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -130,7 +141,8 @@ def save_leaderboard(user_id, score):
 def normalize_text(text):
     if not text:
         return text
-    return unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode('ascii')
+    # Preserve Unicode instead of stripping non-ASCII
+    return unicodedata.normalize('NFKD', text)
 
 def generate_pdf_summary(user_id, role, mode, questions, responses, feedbacks, summary):
     try:
@@ -245,7 +257,7 @@ with col1:
                                 st.rerun()
                         except Exception as e:
                             st.error(f"Failed to generate questions: {str(e)}. Check your HF_TOKEN setup.")
-    
+
     elif st.session_state.step == "interview" and st.session_state.questions:
         question = st.session_state.questions[st.session_state.current_question_index]
         with st.container():
@@ -347,18 +359,22 @@ with col1:
                         }
                     }
                 }
-                # Render Chart.js using st.markdown with HTML/JS
-                chart_html = f"""
-                <div>
-                    <canvas id="performanceChart"></canvas>
-                    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-                    <script>
-                        const ctx = document.getElementById('performanceChart').getContext('2d');
-                        new Chart(ctx, {json.dumps(chart_data)});
-                    </script>
-                </div>
-                """
-                st.markdown(chart_html, unsafe_allow_html=True)
+                try:
+                    # Render Chart.js using st.markdown with HTML/JS
+                    chart_html = f"""
+                    <div>
+                        <canvas id="performanceChart"></canvas>
+                        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+                        <script>
+                            const ctx = document.getElementById('performanceChart').getContext('2d');
+                            new Chart(ctx, {json.dumps(chart_data)});
+                        </script>
+                    </div>
+                    """
+                    st.markdown(chart_html, unsafe_allow_html=True)
+                except Exception as e:
+                    st.error(f"Failed to render chart: {str(e)}. Showing scores as text instead.")
+                    st.write("Scores:", st.session_state.scores)
 
             col_txt, col_pdf, col_new = st.columns(3)
             with col_txt:
