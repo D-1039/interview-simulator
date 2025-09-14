@@ -1,16 +1,29 @@
 import os
+import streamlit as st  # Add this import
 import time
+import re
+import sqlite3
 from groq import Groq
 from dotenv import load_dotenv
 
+# Load .env for local development (optional)
 load_dotenv()
-api_key = os.getenv("GROQ_API_KEY")
+
+# Get API key: Use st.secrets in cloud, fallback to env var locally
+if "GROQ_API_KEY" in st.secrets:
+    api_key = st.secrets["GROQ_API_KEY"]
+else:
+    api_key = os.getenv("GROQ_API_KEY")
+
 if not api_key:
-    raise ValueError("GROQ_API_KEY not found in environment variables")
+    raise ValueError("GROQ_API_KEY not found. Set it in Streamlit secrets or .env file.")
+
 try:
     client = Groq(api_key=api_key)
 except Exception as e:
     raise RuntimeError(f"Failed to initialize Groq client: {e}")
+
+# ... (rest of your bot.py code remains the same)
 
 def generate_questions(role, domain, mode, num_questions=5, question_set="Standard"):
     prompt = (
